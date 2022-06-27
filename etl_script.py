@@ -31,6 +31,9 @@ df1 = df1.drop(columns='_rev')
 df1 = df1[['_id', 'user_id', 'event_type', 'location', 'timestamp']]
 df1 = df1.rename(columns={"_id":"id"})
 
+# modify here to set index to 'id' column to remove default index
+df1 = df1.set_index('id')
+
 # df2: desired schema 2
 
 # sort location_table according to each individual user_id and timestamp
@@ -52,6 +55,65 @@ df2['visit_count'] = df2.groupby(['user_id', 'location'])['location'].transform(
 df2 = df2.drop(columns='timestamp')
 df2 = df2[['date', 'user_id', 'location', 'time_spent', 'visit_count']]
 df2 = df2.drop_duplicates()
-df2 = df2.sort_values(by=['user_id','location']).reset_index(drop=True)
+df2 = df2.sort_values(by=['user_id','location']).reset_index().set_index('date').drop('index', axis=1) # modify index to remove default index
 
-print(df2)
+
+# establish connection to postgres
+import os
+import psycopg2
+from dotenv import load_dotenv
+
+# required to load the previously defined environment variables
+load_dotenv()  
+
+# create connection to postgres
+pgcon = psycopg2.connect(
+    host = os.getenv('PG_HOST'),user = os.getenv('PG_USER'),password = os.getenv('PG_PASSWORD'))
+
+# creating cursor object using the cursor() method
+pgcursor = pgcon.cursor()
+
+# import ISOLATION_LEVEL_AUTOCOMMIT from psycopg2 extensions to lock the server
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+pgcon.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+
+# to create database and set isolation level to autocommit
+pgcursor.execute("DROP DATABASE IF EXISTS {0}".format(os.getenv('PG_DATABASE')))
+pgcursor.execute("CREATE DATABASE {0}".format(os.getenv('PG_DATABASE')))
+
+# connect to postgre again to connect to created database
+pgcon = psycopg2.connect(
+    host = os.getenv('PG_HOST'),database = os.getenv('PG_database'),user = os.getenv('PG_USER'),password = os.getenv('PG_PASSWORD'))
+
+# import create_engine from sqlalchemy
+import sqlalchemy
+from sqlalchemy import create_engine
+
+load_dotenv()
+
+# create engine to faciliate communication between python and database in postgres
+con_string = "postgresql+psycopg2://{0}:{1}@{2}/{3}".format(os.getenv('PG_USER'),os.getenv('PG_PASSWORD'), os.getenv('PG_HOST'), os.getenv('PG_DATABASE'))
+engine = create_engine(con_string)
+
+# load df1 into PostgreSQL table in database
+df1.to_sql('df1', engine, if_exists='replace', index = True)
+
+# Change your column datatype for df1 and set id as primary key
+engine.execute('ALTER TABLE df1 ALTER COLUMN id TYPE varchar(50)')
+engine.execute('ALTER TABLE df1 ALTER COLUMN user_id TYPE varchar(50)')
+engine.execute('ALTER TABLE df1 ALTER COLUMN event_type TYPE varchar(100)')
+engine.execute('ALTER TABLE df1 ALTER COLUMN location TYPE varchar(100)')
+engine.execute('ALTER TABLE df1 ALTER COLUMN timestamp TYPE timestamp')
+engine.execute('ALTER TABLE df1 ADD PRIMARY KEY ("id");')
+
+# load df2 into PostgreSQL table in database
+df2.to_sql('df2', engine, if_exists='replace', index = True)
+
+# Change your column datatype for df2
+engine.execute('ALTER TABLE df2 ALTER COLUMN date TYPE date')
+engine.execute('ALTER TABLE df2 ALTER COLUMN user_id TYPE varchar(50)')
+engine.execute('ALTER TABLE df2 ALTER COLUMN location TYPE varchar(100)')
+engine.execute('ALTER TABLE df2 ALTER COLUMN time_spent TYPE decimal(10,2)')
+engine.execute('ALTER TABLE df2 ALTER COLUMN visit_count TYPE int USING visit_count :: integer')
+
+pgcon.close()
